@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>ติดตามการจัดส่ง — {{CUSTOMER}}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#132A1D;        /* เขียวเข้มเกือบดำ */
+    --green:#1E6B3C;      /* เขียวสนามหญ้า */
+    --lime:#9BE24B;       /* เขียวมะนาว — จุดสถานะ */
+    --mist:#EDF3EE;       /* พื้นหลัง */
+    --card:#FFFFFF;
+    --muted:#5C7264;
+    --warn:#B4540A;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:'IBM Plex Sans Thai',sans-serif;
+    background:var(--mist); color:var(--ink);
+    display:flex; flex-direction:column;
+  }
+  /* ---------- แถบหัว ---------- */
+  header{
+    background:var(--green); color:#fff;
+    padding:14px 18px 16px;
+    border-radius:0 0 18px 18px;
+    box-shadow:0 4px 14px rgba(19,42,29,.18);
+    z-index:1000; position:relative;
+  }
+  .eyebrow{font-size:12px; letter-spacing:.06em; opacity:.85}
+  h1{font-family:'Kanit',sans-serif; font-weight:600; font-size:20px; line-height:1.3; margin-top:2px}
+  .live{
+    display:inline-flex; align-items:center; gap:7px;
+    margin-top:8px; padding:4px 12px; border-radius:99px;
+    background:rgba(255,255,255,.14); font-size:13px; font-weight:500;
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--lime);
+       box-shadow:0 0 0 0 rgba(155,226,75,.6); animation:pulse 1.6s infinite}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(155,226,75,.55)}
+    70%{box-shadow:0 0 0 9px rgba(155,226,75,0)}
+    100%{box-shadow:0 0 0 0 rgba(155,226,75,0)}
+  }
+  @media (prefers-reduced-motion: reduce){.dot{animation:none}}
+  .live.stale .dot{background:#F2B33D; animation:none}
+  .live.done .dot{background:#9AB5A3; animation:none}
+
+  /* ---------- แผนที่ ---------- */
+  #map{flex:1; min-height:0}
+  .truck-marker{
+    font-size:26px; line-height:1;
+    filter:drop-shadow(0 2px 3px rgba(0,0,0,.35));
+    transform:translate(-4px,-6px);
+  }
+
+  /* ---------- แผงข้อมูลล่าง ---------- */
+  .sheet{
+    background:var(--card);
+    border-radius:18px 18px 0 0;
+    box-shadow:0 -4px 18px rgba(19,42,29,.12);
+    padding:14px 18px calc(14px + env(safe-area-inset-bottom));
+    z-index:1000; position:relative;
+  }
+  .stats{display:flex; gap:8px}
+  .stat{flex:1; background:var(--mist); border-radius:12px; padding:10px 8px; text-align:center}
+  .stat b{font-family:'Kanit',sans-serif; font-weight:600; font-size:22px; display:block}
+  .stat span{font-size:11.5px; color:var(--muted)}
+  .foot{margin-top:10px; font-size:12px; color:var(--muted); text-align:center}
+  .foot.warn{color:var(--warn); font-weight:500}
+
+  /* ---------- หน้าจบงาน / รอสัญญาณ ---------- */
+  .overlay{
+    position:absolute; inset:0; z-index:2000;
+    background:var(--mist);
+    display:none; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:32px; gap:10px;
+  }
+  .overlay.show{display:flex}
+  .overlay .big{font-size:52px}
+  .overlay h2{font-family:'Kanit',sans-serif; font-size:22px}
+  .overlay p{color:var(--muted); font-size:14.5px; max-width:300px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">การจัดส่งสำหรับ</div>
+  <h1 id="customer">{{CUSTOMER}}</h1>
+  <div class="live" id="liveBadge"><span class="dot"></span><span id="liveText">กำลังเชื่อมต่อ…</span></div>
+</header>
+
+<div id="map"></div>
+
+<div class="sheet">
+  <div class="stats">
+    <div class="stat"><b id="stDist">–</b><span>กม. ถึงปลายทาง</span></div>
+    <div class="stat"><b id="stEta">–</b><span>นาที (โดยประมาณ)</span></div>
+    <div class="stat"><b id="stSpeed">–</b><span>กม./ชม.</span></div>
+  </div>
+  <div class="foot" id="foot">ตำแหน่งอัปเดตอัตโนมัติทุก 1 นาที</div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="big" id="ovIcon">📦</div>
+  <h2 id="ovTitle"></h2>
+  <p id="ovText"></p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const TOKEN = "{{TOKEN}}";
+const API = `/api/track/${TOKEN}`;
+
+const map = L.map('map', {zoomControl:false}).setView([13.7563,100.5018], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+const truckIcon = L.divIcon({className:'', html:'<div class="truck-marker">🚚</div>', iconSize:[26,26]});
+let truck = null, dest = null, followed = false;
+let trail = L.polyline([], {color:'#1E6B3C', weight:5, opacity:.75, lineJoin:'round'}).addTo(map);
+let startDot = null;
+
+const $ = id => document.getElementById(id);
+
+function setBadge(cls, text){
+  const b = $('liveBadge');
+  b.className = 'live' + (cls ? ' ' + cls : '');
+  $('liveText').textContent = text;
+}
+
+function showOverlay(icon, title, text){
+  $('ovIcon').textContent = icon;
+  $('ovTitle').textContent = title;
+  $('ovText').textContent = text;
+  $('overlay').classList.add('show');
+}
+
+async function refresh(){
+  let d;
+  try {
+    const r = await fetch(API);
+    if (!r.ok) throw 0;
+    d = await r.json();
+  } catch {
+    setBadge('stale', 'เชื่อมต่อไม่ได้ กำลังลองใหม่…');
+    return;
+  }
+
+  if (d.status === 'done'){
+    setBadge('done', 'จบงานจัดส่งแล้ว');
+    showOverlay('✅','การจัดส่งเสร็จสิ้น','งานจัดส่งนี้สิ้นสุดแล้ว ขอบคุณที่ใช้บริการครับ');
+    clearInterval(timer);
+    return;
+  }
+  if (d.status === 'waiting'){
+    setBadge('stale', 'รอสัญญาณจากรถส่งของ…');
+    return;
+  }
+
+  $('overlay').classList.remove('show');
+  const pos = [d.lat, d.lon];
+
+  // เส้นทางที่รถวิ่งผ่านมาแล้ว
+  if (Array.isArray(d.path) && d.path.length){
+    trail.setLatLngs(d.path);
+    if (!startDot){
+      startDot = L.circleMarker(d.path[0], {radius:6, color:'#1E6B3C',
+        fillColor:'#9BE24B', fillOpacity:1, weight:2}).addTo(map)
+        .bindPopup('จุดเริ่มเดินทาง');
+    }
+  }
+
+  if (!truck){
+    truck = L.marker(pos, {icon: truckIcon}).addTo(map);
+  } else {
+    truck.setLatLng(pos);
+  }
+
+  if (d.dest_lat != null && !dest){
+    dest = L.marker([d.dest_lat, d.dest_lon]).addTo(map)
+            .bindPopup('จุดหมาย: ' + (d.destination || 'ปลายทาง'));
+  }
+
+  if (!followed){
+    const pts = [pos];
+    if (dest) pts.push(dest.getLatLng());
+    if (Array.isArray(d.path) && d.path.length) pts.push(d.path[0]);
+    if (pts.length > 1) map.fitBounds(L.latLngBounds(pts).pad(0.25));
+    else map.setView(pos, 14);
+    followed = true;
+  } else {
+    map.panTo(pos, {animate:true});
+  }
+
+  $('stDist').textContent  = d.distance_km != null ? d.distance_km : '–';
+  $('stEta').textContent   = d.eta_min != null ? d.eta_min : '–';
+  $('stSpeed').textContent = Math.round(d.speed_kmh);
+
+  if (d.stale){
+    setBadge('stale', 'สัญญาณขาดชั่วคราว');
+    $('foot').className = 'foot warn';
+    $('foot').textContent = `ตำแหน่งล่าสุดเมื่อ ${Math.round(d.seconds_ago/60)} นาทีที่แล้ว`;
+  } else {
+    setBadge('', 'รถกำลังเดินทาง · LIVE');
+    $('foot').className = 'foot';
+    $('foot').textContent = 'ตำแหน่งอัปเดตอัตโนมัติทุก 1 นาที';
+  }
+}
+
+refresh();
+const timer = setInterval(refresh, 10000);
+</script>
+</body>
+</html>

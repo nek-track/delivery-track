@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>จัดการงานส่งของ</title>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#132A1D;--green:#1E6B3C;--lime:#9BE24B;--mist:#EDF3EE;--muted:#5C7264;--red:#B4300A}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'IBM Plex Sans Thai',sans-serif;background:var(--mist);color:var(--ink);
+       max-width:560px;margin:0 auto;padding:18px 16px 40px}
+  h1{font-family:'Kanit',sans-serif;font-size:22px;margin-bottom:14px}
+  h2{font-family:'Kanit',sans-serif;font-size:16px;margin:22px 0 10px}
+  .card{background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:10px;
+        box-shadow:0 2px 8px rgba(19,42,29,.07)}
+  .device{display:flex;align-items:center;gap:10px}
+  .device .dot{width:10px;height:10px;border-radius:50%;background:#C9CFC9}
+  .device.online .dot{background:var(--lime)}
+  .device b{flex:1}
+  .device small{color:var(--muted)}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input,select{width:100%;padding:10px 12px;border:1px solid #D3DDD5;border-radius:10px;
+               font:inherit;font-size:15px;background:#fff}
+  button{width:100%;margin-top:14px;padding:12px;border:0;border-radius:10px;
+         background:var(--green);color:#fff;font:inherit;font-size:15.5px;font-weight:600;cursor:pointer}
+  button:active{opacity:.85}
+  .result{display:none;margin-top:12px;padding:12px;border-radius:10px;background:#EAF6E4;font-size:14px;word-break:break-all}
+  .result.show{display:block}
+  .result a{color:var(--green);font-weight:600}
+  .copy{margin-top:8px;background:var(--ink)}
+  .job{display:flex;align-items:center;gap:10px;font-size:14px}
+  .job .info{flex:1;min-width:0}
+  .job .info b{display:block}
+  .job .info small{color:var(--muted)}
+  .job button{width:auto;margin:0;padding:7px 12px;font-size:13px;background:var(--red)}
+  .job.done{opacity:.7}
+  .job.done > button{display:none}
+  .empty{color:var(--muted);font-size:14px;text-align:center;padding:14px}
+  .links{display:flex;gap:14px;margin-top:3px}
+  .links a{color:var(--green);font-size:12.5px;font-weight:600;text-decoration:none}
+  .links a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<h1>🚚 จัดการงานส่งของ</h1>
+
+<h2>สถานะมือถือ</h2>
+<div id="devices"></div>
+
+<h2>สร้างงานส่งของใหม่</h2>
+<div class="card">
+  <label>ใช้มือถือเครื่องไหน</label>
+  <select id="fDevice"></select>
+  <label>ชื่อลูกค้า / หน่วยงาน *</label>
+  <input id="fCustomer" placeholder="เช่น อบต.บ้านใหม่">
+  <label>ปลายทาง (ไม่บังคับ)</label>
+  <input id="fDest" placeholder="เช่น โรงเรียนวัดศรีสุข อ.เมือง">
+  <label>พิกัดปลายทาง lat,lon (ไม่บังคับ — ใส่แล้วลูกค้าจะเห็นระยะทาง/ETA)</label>
+  <input id="fCoords" placeholder="เช่น 13.7563,100.5018">
+  <button onclick="createJob()">สร้างงาน + รับลิงก์ tracking</button>
+  <div class="result" id="result"></div>
+</div>
+
+<h2>งานล่าสุด</h2>
+<div id="jobs"></div>
+
+<script>
+const KEY = "{{ADMIN_KEY}}";
+const $ = id => document.getElementById(id);
+
+function timeAgo(ts, now){
+  if (!ts) return 'ยังไม่เคยส่งพิกัด';
+  const m = Math.round((now - ts) / 60);
+  return m < 1 ? 'เมื่อครู่' : `${m} นาทีที่แล้ว`;
+}
+
+async function load(){
+  const r = await fetch(`/api/admin/state?key=${KEY}`);
+  if (!r.ok){ document.body.innerHTML = '<p style="padding:30px">คีย์แอดมินไม่ถูกต้อง</p>'; return; }
+  const d = await r.json();
+
+  $('devices').innerHTML = d.devices.map(x => `
+    <div class="card device ${x.online ? 'online' : ''}">
+      <span class="dot"></span>
+      <b>${x.label}</b>
+      <small>${x.online ? 'ออนไลน์' : 'ออฟไลน์'} · ${timeAgo(x.last_seen, d.now)}
+        ${x.battery != null ? ' · 🔋' + Math.round(x.battery) + '%' : ''}</small>
+    </div>`).join('');
+
+  $('fDevice').innerHTML = d.devices.map(x =>
+    `<option value="${x.id}">${x.label} ${x.online ? '(ออนไลน์)' : '(ออฟไลน์)'}</option>`).join('');
+
+  $('jobs').innerHTML = d.jobs.length ? d.jobs.map(j => `
+    <div class="card job ${j.status}">
+      <div class="info">
+        <b>${j.customer}</b>
+        <small>${j.destination || 'ไม่ระบุปลายทาง'} · ${j.device_id}
+          · ${j.status === 'active' ? '🟢 กำลังส่ง' : 'จบงานแล้ว'}</small>
+        <div class="links">
+          <a href="/track/${j.token}" target="_blank">🔗 ลิงก์ลูกค้า</a>
+          <a href="/admin/track/${j.token}?key=${KEY}" target="_blank">🗺️ ดูเส้นทาง</a>
+          <a href="/api/admin/jobs/${j.token}/export?key=${KEY}&format=gpx">⬇️ GPX</a>
+        </div>
+      </div>
+      <button onclick="endJob('${j.token}')">จบงาน</button>
+    </div>`).join('') : '<div class="empty">ยังไม่มีงานส่งของ</div>';
+}
+
+async function createJob(){
+  const customer = $('fCustomer').value.trim();
+  if (!customer){ alert('กรุณาใส่ชื่อลูกค้า'); return; }
+  let dest_lat = null, dest_lon = null;
+  const c = $('fCoords').value.trim();
+  if (c){
+    const parts = c.split(',').map(s => parseFloat(s.trim()));
+    if (parts.length === 2 && !parts.some(isNaN)) [dest_lat, dest_lon] = parts;
+    else { alert('รูปแบบพิกัดไม่ถูกต้อง ใช้ lat,lon เช่น 13.75,100.50'); return; }
+  }
+  const r = await fetch(`/api/admin/jobs?key=${KEY}`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      device_id: $('fDevice').value, customer,
+      destination: $('fDest').value.trim(), dest_lat, dest_lon
+    })
+  });
+  const d = await r.json();
+  if (!r.ok){ alert(d.detail || 'เกิดข้อผิดพลาด'); return; }
+  const full = location.origin + d.url;
+  $('result').innerHTML = `ลิงก์สำหรับส่งให้ลูกค้า:<br><a href="${d.url}" target="_blank">${full}</a>
+    <button class="copy" onclick="navigator.clipboard.writeText('${full}').then(()=>this.textContent='คัดลอกแล้ว ✓')">คัดลอกลิงก์</button>`;
+  $('result').classList.add('show');
+  $('fCustomer').value = ''; $('fDest').value = ''; $('fCoords').value = '';
+  load();
+}
+
+async function endJob(token){
+  if (!confirm('ยืนยันจบงานนี้? ลิงก์ลูกค้าจะใช้ไม่ได้อีก')) return;
+  await fetch(`/api/admin/jobs/${token}/end?key=${KEY}`, {method:'POST'});
+  load();
+}
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

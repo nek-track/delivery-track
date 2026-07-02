@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>เส้นทางการจัดส่ง — {{CUSTOMER}}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#132A1D;--green:#1E6B3C;--lime:#9BE24B;--mist:#EDF3EE;--card:#fff;--muted:#5C7264;--warn:#B4540A}
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:'IBM Plex Sans Thai',sans-serif;background:var(--mist);color:var(--ink);
+       display:flex;flex-direction:column}
+  header{background:var(--green);color:#fff;padding:12px 18px 14px;
+         box-shadow:0 4px 14px rgba(19,42,29,.18);z-index:1000;position:relative}
+  .eyebrow{font-size:12px;opacity:.85}
+  h1{font-family:'Kanit',sans-serif;font-weight:600;font-size:19px;margin-top:2px}
+  #map{flex:1;min-height:0}
+  .truck-marker{font-size:24px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35));transform:translate(-3px,-5px)}
+  .sheet{background:var(--card);border-radius:16px 16px 0 0;box-shadow:0 -4px 18px rgba(19,42,29,.12);
+         padding:12px 16px calc(12px + env(safe-area-inset-bottom));z-index:1000;position:relative}
+  .stats{display:flex;gap:8px}
+  .stat{flex:1;background:var(--mist);border-radius:12px;padding:9px 6px;text-align:center}
+  .stat b{font-family:'Kanit',sans-serif;font-weight:600;font-size:19px;display:block}
+  .stat span{font-size:11px;color:var(--muted)}
+  .dl{display:flex;gap:8px;margin-top:10px}
+  .dl a{flex:1;text-align:center;padding:10px;border-radius:10px;background:var(--ink);color:#fff;
+        font-weight:600;font-size:14px;text-decoration:none}
+  .dl a.alt{background:var(--green)}
+  .empty{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;
+         background:var(--mist);text-align:center;padding:32px;gap:8px;z-index:2000}
+  .empty.show{display:flex}
+  .empty .big{font-size:46px}
+  .empty h2{font-family:'Kanit',sans-serif;font-size:20px}
+  .empty p{color:var(--muted);font-size:14px;max-width:280px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">ประวัติเส้นทาง (แอดมิน)</div>
+  <h1 id="title">{{CUSTOMER}}</h1>
+</header>
+
+<div id="map"></div>
+
+<div class="sheet">
+  <div class="stats">
+    <div class="stat"><b id="stDist">–</b><span>กม. ที่วิ่งจริง</span></div>
+    <div class="stat"><b id="stDur">–</b><span>นาที (ระยะเวลา)</span></div>
+    <div class="stat"><b id="stPts">–</b><span>จุดที่บันทึก</span></div>
+    <div class="stat"><b id="stStatus">–</b><span>สถานะงาน</span></div>
+  </div>
+  <div class="dl">
+    <a class="alt" id="dlGpx">⬇️ ดาวน์โหลด GPX</a>
+    <a id="dlGeo">⬇️ GeoJSON</a>
+  </div>
+</div>
+
+<div class="empty" id="empty">
+  <div class="big">🛰️</div>
+  <h2>ยังไม่มีข้อมูลเส้นทาง</h2>
+  <p>งานนี้ยังไม่มีจุดพิกัดที่บันทึกไว้ (มือถืออาจยังไม่ส่งพิกัด หรือรถยังไม่ออกเดินทาง)</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const TOKEN = "{{TOKEN}}";
+const KEY = "{{ADMIN_KEY}}";
+const $ = id => document.getElementById(id);
+
+$('dlGpx').href = `/api/admin/jobs/${TOKEN}/export?key=${KEY}&format=gpx`;
+$('dlGeo').href = `/api/admin/jobs/${TOKEN}/export?key=${KEY}&format=geojson`;
+
+const map = L.map('map', {zoomControl:true}).setView([13.7563,100.5018], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {maxZoom:19, attribution:'&copy; OpenStreetMap'}).addTo(map);
+
+const truckIcon = L.divIcon({className:'', html:'<div class="truck-marker">🚚</div>', iconSize:[24,24]});
+
+(async function(){
+  let d;
+  try {
+    const r = await fetch(`/api/admin/jobs/${TOKEN}/track?key=${KEY}`);
+    if (!r.ok) throw 0;
+    d = await r.json();
+  } catch { $('title').textContent = 'โหลดข้อมูลไม่สำเร็จ'; return; }
+
+  $('title').textContent = d.customer + (d.destination ? ' → ' + d.destination : '');
+  $('stDist').textContent = d.distance_km;
+  $('stDur').textContent = d.duration_min;
+  $('stPts').textContent = d.point_count;
+  $('stStatus').textContent = d.status === 'active' ? 'กำลังส่ง' : 'จบแล้ว';
+
+  const pts = d.points.map(p => [p.lat, p.lon]);
+  if (!pts.length){ $('empty').classList.add('show'); return; }
+
+  L.polyline(pts, {color:'#1E6B3C', weight:5, opacity:.8, lineJoin:'round'}).addTo(map);
+
+  // จุดเริ่ม
+  L.circleMarker(pts[0], {radius:7, color:'#1E6B3C', fillColor:'#9BE24B', fillOpacity:1, weight:2})
+    .addTo(map).bindPopup('จุดเริ่มเดินทาง');
+  // จุดสุดท้าย (รถ)
+  L.marker(pts[pts.length-1], {icon: truckIcon}).addTo(map).bindPopup('ตำแหน่งล่าสุด');
+  // ปลายทาง
+  if (d.dest_lat != null && d.dest_lon != null){
+    L.marker([d.dest_lat, d.dest_lon]).addTo(map).bindPopup('ปลายทาง: ' + (d.destination || ''));
+  }
+
+  const all = pts.concat(d.dest_lat != null ? [[d.dest_lat, d.dest_lon]] : []);
+  map.fitBounds(L.latLngBounds(all).pad(0.2));
+})();
+</script>
+</body>
+</html>
