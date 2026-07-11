@@ -187,6 +187,12 @@ def admin_page(key: str = Query("")):
     return render("admin.html", ADMIN_KEY=key)
 
 
+@app.get("/admin/map", response_class=HTMLResponse)
+def admin_map_page(key: str = Query("")):
+    require_admin(key)
+    return render("map.html", ADMIN_KEY=key)
+
+
 @app.get("/api/admin/state")
 def admin_state(key: str = Query("")):
     require_admin(key)
@@ -204,6 +210,10 @@ def admin_state(key: str = Query("")):
             "online": bool(pos) and now - pos["updated_at"] <= STALE_SECONDS,
             "last_seen": pos["updated_at"] if pos else None,
             "battery": pos["battery"] if pos else None,
+            "lat": pos["lat"] if pos else None,
+            "lon": pos["lon"] if pos else None,
+            "speed_kmh": pos["speed_kmh"] if pos else None,
+            "bearing": pos["bearing"] if pos else None,
         })
     return {"devices": devices, "jobs": jobs, "now": now}
 

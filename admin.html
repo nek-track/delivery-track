@@ -40,6 +40,9 @@
   .links{display:flex;gap:14px;margin-top:3px}
   .links a{color:var(--green);font-size:12.5px;font-weight:600;text-decoration:none}
   .links a:hover{text-decoration:underline}
+  .maplink{display:block;text-align:center;margin:4px 0 2px;padding:11px;border-radius:10px;
+           background:var(--ink);color:#fff;font-weight:600;font-size:14.5px;text-decoration:none}
+  .maplink:active{opacity:.85}
 </style>
 </head>
 <body>
@@ -47,6 +50,7 @@
 
 <h2>สถานะมือถือ</h2>
 <div id="devices"></div>
+<a class="maplink" id="mapLink" target="_blank">🗺️ เปิดแผนที่รวม — ดูตำแหน่งสดทั้ง 2 เครื่อง</a>
 
 <h2>สร้างงานส่งของใหม่</h2>
 <div class="card">
@@ -68,6 +72,7 @@
 <script>
 const KEY = "{{ADMIN_KEY}}";
 const $ = id => document.getElementById(id);
+$('mapLink').href = `/admin/map?key=${KEY}`;
 
 function timeAgo(ts, now){
   if (!ts) return 'ยังไม่เคยส่งพิกัด';

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>แผนที่รวม — ตำแหน่งสด</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#132A1D;--green:#1E6B3C;--lime:#9BE24B;--mist:#EDF3EE;--card:#fff;--muted:#5C7264;--amber:#B4540A}
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:'IBM Plex Sans Thai',sans-serif;background:var(--mist);color:var(--ink);
+       display:flex;flex-direction:column}
+  header{background:var(--green);color:#fff;padding:12px 18px 14px;
+         box-shadow:0 4px 14px rgba(19,42,29,.18);z-index:1000;position:relative;
+         display:flex;align-items:center;justify-content:space-between;gap:10px}
+  header .t .eyebrow{font-size:12px;opacity:.85}
+  header .t h1{font-family:'Kanit',sans-serif;font-weight:600;font-size:19px;margin-top:2px}
+  header a.back{color:#fff;font-size:13px;text-decoration:none;background:rgba(255,255,255,.15);
+                padding:7px 12px;border-radius:99px;white-space:nowrap}
+  #map{flex:1;min-height:0}
+  .truck-marker{font-size:26px;line-height:1;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35));transform:translate(-4px,-6px)}
+  .badge{background:#fff;border-radius:50%;font-size:11px;font-weight:700;font-family:'Kanit',sans-serif;
+         width:18px;height:18px;line-height:18px;text-align:center;color:var(--green);
+         border:2px solid var(--green);box-shadow:0 1px 3px rgba(0,0,0,.3)}
+  .sheet{background:var(--card);border-radius:16px 16px 0 0;box-shadow:0 -4px 18px rgba(19,42,29,.12);
+         padding:12px 16px calc(12px + env(safe-area-inset-bottom));z-index:1000;position:relative}
+  .row{display:flex;align-items:center;gap:10px;padding:8px 4px;font-size:14px}
+  .row+.row{border-top:1px solid #EEF3EF}
+  .dot{width:11px;height:11px;border-radius:50%;background:#C9CFC9;flex:none}
+  .row.online .dot{background:var(--lime)}
+  .row .name{flex:1;min-width:0}
+  .row .name b{display:block}
+  .row .name small{color:var(--muted)}
+  .row .meta{text-align:right;font-size:12.5px;color:var(--muted);white-space:nowrap}
+  .foot{margin-top:8px;font-size:12px;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="t">
+    <div class="eyebrow">แผนที่รวม (แอดมิน)</div>
+    <h1>ตำแหน่งสดของมือถือทุกเครื่อง</h1>
+  </div>
+  <a class="back" id="backLink" href="#">← กลับหน้าแอดมิน</a>
+</header>
+
+<div id="map"></div>
+
+<div class="sheet">
+  <div id="list"></div>
+  <div class="foot" id="foot">อัปเดตอัตโนมัติทุก 15 วินาที</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const KEY = "{{ADMIN_KEY}}";
+document.getElementById('backLink').href = `/admin?key=${KEY}`;
+
+const map = L.map('map', {zoomControl:true}).setView([13.7563,100.5018], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {maxZoom:19, attribution:'&copy; OpenStreetMap'}).addTo(map);
+
+const markers = {};   // device_id -> marker
+let firstFit = false;
+
+function icon(numText){
+  return L.divIcon({className:'', iconSize:[26,26],
+    html:`<div class="truck-marker">🚚<span class="badge">${numText}</span></div>`});
+}
+
+function timeAgo(ts, now){
+  if (!ts) return 'ยังไม่เคยส่งพิกัด';
+  const m = Math.round((now - ts) / 60);
+  return m < 1 ? 'อัปเดตเมื่อครู่' : `${m} นาทีที่แล้ว`;
+}
+
+async function refresh(){
+  let d;
+  try {
+    const r = await fetch(`/api/admin/state?key=${KEY}&_=${Date.now()}`);
+    if (!r.ok) throw 0;
+    d = await r.json();
+  } catch {
+    document.getElementById('foot').textContent = 'เชื่อมต่อไม่ได้ กำลังลองใหม่…';
+    return;
+  }
+
+  const bounds = [];
+  const listHtml = [];
+
+  d.devices.forEach((x, i) => {
+    const num = (x.id.match(/\d+/) || [i+1])[0];
+    const hasPos = x.lat != null && x.lon != null;
+
+    if (hasPos){
+      const pos = [x.lat, x.lon];
+      bounds.push(pos);
+      const popup = `<b>${x.label}</b><br>${x.online ? '🟢 ออนไลน์' : '⚪ ออฟไลน์'}` +
+                    `<br>${timeAgo(x.last_seen, d.now)}` +
+                    (x.battery != null ? `<br>🔋 ${Math.round(x.battery)}%` : '') +
+                    (x.speed_kmh != null ? `<br>⚡ ${Math.round(x.speed_kmh)} กม./ชม.` : '');
+      if (!markers[x.id]){
+        markers[x.id] = L.marker(pos, {icon: icon(num)}).addTo(map).bindPopup(popup);
+      } else {
+        markers[x.id].setLatLng(pos).setPopupContent(popup);
+        markers[x.id].setIcon(icon(num));
+      }
+      markers[x.id].setOpacity(x.online ? 1 : 0.45);
+    }
+
+    listHtml.push(`
+      <div class="row ${x.online ? 'online' : ''}">
+        <span class="dot"></span>
+        <div class="name"><b>${x.label}</b>
+          <small>${x.online ? 'กำลังส่งพิกัด' : 'ออฟไลน์'} · ${timeAgo(x.last_seen, d.now)}</small>
+        </div>
+        <div class="meta">
+          ${x.battery != null ? '🔋 ' + Math.round(x.battery) + '%' : ''}
+          ${hasPos && x.speed_kmh != null ? '<br>' + Math.round(x.speed_kmh) + ' กม./ชม.' : ''}
+        </div>
+      </div>`);
+  });
+
+  document.getElementById('list').innerHTML = listHtml.join('');
+
+  if (!firstFit && bounds.length){
+    if (bounds.length === 1) map.setView(bounds[0], 15);
+    else map.fitBounds(L.latLngBounds(bounds).pad(0.3));
+    firstFit = true;
+  }
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
