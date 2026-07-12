@@ -91,6 +91,14 @@ def init_db():
 init_db()
 
 
+def _num(v, default=0.0):
+    """แปลงเป็นตัวเลขแบบปลอดภัย (ค่าว่าง/ค่าเพี้ยน -> default)"""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def haversine_km(lat1, lon1, lat2, lon2):
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
     a = sin((lat2 - lat1) / 2) ** 2 + cos(lat1) * cos(lat2) * sin((lon2 - lon1) / 2) ** 2
@@ -140,9 +148,20 @@ async def ingest(request: Request):
     if device_id not in DEVICES:
         raise HTTPException(status_code=400, detail="unknown device id")
 
-    lat_f, lon_f = float(lat), float(lon)
-    speed_knots = float(p.get("speed", 0) or 0)
-    speed_kmh = round(speed_knots * 1.852, 1)          # knots -> km/h
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return PlainTextResponse("Delivery Tracker is running")   # พิกัดไม่ใช่ตัวเลข = ยังไม่มี fix
+
+    # ความเร็ว: Traccar Client ส่งเป็น "น็อต" (speed) / GPSLogger ส่งเป็น "เมตร/วินาที" (speed_ms)
+    if p.get("speed_ms") not in (None, ""):
+        speed_kmh = round(_num(p.get("speed_ms")) * 3.6, 1)       # m/s -> km/h
+    else:
+        speed_kmh = round(_num(p.get("speed")) * 1.852, 1)        # knots -> km/h
+
+    bearing = _num(p.get("bearing") if p.get("bearing") not in (None, "") else p.get("direction"))
+    battery = _num(p.get("batt"), None) if p.get("batt") not in (None, "") else None
+
     now = int(time.time())
     with db() as conn:
         prev = conn.execute(
@@ -155,12 +174,7 @@ async def ingest(request: Request):
                ON CONFLICT(device_id) DO UPDATE SET
                  lat=excluded.lat, lon=excluded.lon, speed_kmh=excluded.speed_kmh,
                  bearing=excluded.bearing, battery=excluded.battery, updated_at=excluded.updated_at""",
-            (
-                device_id, lat_f, lon_f, speed_kmh,
-                float(p.get("bearing", 0) or 0),
-                float(p["batt"]) if p.get("batt") else None,
-                now,
-            ),
+            (device_id, lat_f, lon_f, speed_kmh, bearing, battery, now),
         )
 
         # บันทึกจุดลง track ก็ต่อเมื่อขยับพอสมควร (กันจุดซ้อนตอนรถจอด)
