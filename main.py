@@ -131,19 +131,40 @@ def render(name: str, **vars) -> str:
 @app.get("/")
 @app.post("/")
 async def ingest(request: Request):
+    """
+    รับพิกัดได้ 3 แอป:
+      - Traccar Client (OsmAnd) : query/form  speed = น็อต
+      - GPSLogger (custom URL)  : query       speed_ms = เมตร/วินาที
+      - OwnTracks (HTTP mode)   : JSON body   vel = กม./ชม., cog = ทิศทาง
+    """
     p = dict(request.query_params)
+    is_json = False
     if request.method == "POST":
-        try:
-            form = await request.form()
-            p.update(dict(form))
-        except Exception:
-            pass
+        ctype = (request.headers.get("content-type") or "").lower()
+        if "json" in ctype:
+            is_json = True                      # OwnTracks
+            try:
+                body = await request.json()
+                if isinstance(body, dict):
+                    p.update({k: v for k, v in body.items() if v is not None})
+            except Exception:
+                pass
+        else:
+            try:
+                form = await request.form()
+                p.update(dict(form))
+            except Exception:
+                pass
+
+    def ack():
+        # OwnTracks (HTTP mode) ต้องการคำตอบเป็น JSON array ไม่งั้นแอปจะฟ้อง error
+        return JSONResponse([]) if is_json else PlainTextResponse("OK")
 
     device_id = p.get("id")
     lat, lon = p.get("lat"), p.get("lon")
     if not device_id or lat is None or lon is None:
-        # เปิดหน้าแรกด้วย browser ธรรมดา
-        return PlainTextResponse("Delivery Tracker is running")
+        # เปิดหน้าแรกด้วย browser ธรรมดา / OwnTracks ส่งข้อความที่ไม่ใช่พิกัด
+        return ack() if is_json else PlainTextResponse("Delivery Tracker is running")
 
     if device_id not in DEVICES:
         raise HTTPException(status_code=400, detail="unknown device id")
@@ -151,15 +172,20 @@ async def ingest(request: Request):
     try:
         lat_f, lon_f = float(lat), float(lon)
     except (TypeError, ValueError):
-        return PlainTextResponse("Delivery Tracker is running")   # พิกัดไม่ใช่ตัวเลข = ยังไม่มี fix
+        return ack()      # พิกัดไม่ใช่ตัวเลข = ยังไม่มี fix
 
-    # ความเร็ว: Traccar Client ส่งเป็น "น็อต" (speed) / GPSLogger ส่งเป็น "เมตร/วินาที" (speed_ms)
-    if p.get("speed_ms") not in (None, ""):
-        speed_kmh = round(_num(p.get("speed_ms")) * 3.6, 1)       # m/s -> km/h
+    # ความเร็ว: OwnTracks (vel = กม./ชม.) | GPSLogger (speed_ms = ม./วิ) | Traccar (speed = น็อต)
+    if p.get("vel") not in (None, ""):
+        speed_kmh = round(_num(p.get("vel")), 1)
+    elif p.get("speed_ms") not in (None, ""):
+        speed_kmh = round(_num(p.get("speed_ms")) * 3.6, 1)
     else:
-        speed_kmh = round(_num(p.get("speed")) * 1.852, 1)        # knots -> km/h
+        speed_kmh = round(_num(p.get("speed")) * 1.852, 1)
+    speed_kmh = max(0.0, speed_kmh)             # OwnTracks ส่ง -1 เมื่อไม่รู้ความเร็ว
 
-    bearing = _num(p.get("bearing") if p.get("bearing") not in (None, "") else p.get("direction"))
+    # ทิศทาง: Traccar (bearing) | GPSLogger (direction) | OwnTracks (cog)
+    bearing = _num(next((p[k] for k in ("bearing", "direction", "cog")
+                         if p.get(k) not in (None, "")), None))
     battery = _num(p.get("batt"), None) if p.get("batt") not in (None, "") else None
 
     now = int(time.time())
@@ -189,7 +215,7 @@ async def ingest(request: Request):
                 "DELETE FROM tracks WHERE recorded_at < ?",
                 (now - TRACK_RETENTION_HOURS * 3600,),
             )
-    return PlainTextResponse("OK")
+    return ack()
 
 
 # ---------------------------------------------------- 2) ฝั่งแอดมิน (สร้าง/จบงาน)
